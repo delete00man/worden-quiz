@@ -38,6 +38,11 @@ export default function LevelPage() {
     const [loading, setLoading] = useState(true)
     const [completed, setCompleted] = useState(false)
 
+    // New preferences states
+    const [isRandom, setIsRandom] = useState(false)
+    const [reviewOnlyUnknown, setReviewOnlyUnknown] = useState(false)
+    const [displayCards, setDisplayCards] = useState<FlashcardData[]>([])
+
     useEffect(() => {
         if (status === "unauthenticated") {
             router.push("/auth")
@@ -57,11 +62,37 @@ export default function LevelPage() {
                         progressMap[p.flashcardId] = p.known
                     })
                     setProgress(progressMap)
+
+                    // Initial setup of display cards
+                    setDisplayCards(levelData.flashcards)
                     setLoading(false)
                 })
                 .catch(() => setLoading(false))
         }
     }, [status, levelId])
+
+    // Update display cards when preferences change
+    useEffect(() => {
+        if (!level) return
+
+        let cards = [...level.flashcards]
+
+        if (reviewOnlyUnknown) {
+            cards = cards.filter(card => !progress[card.id])
+        }
+
+        if (isRandom) {
+            cards = cards.sort(() => Math.random() - 0.5)
+        } else {
+            // Sort by ID or original order if available to keep stable when disabling random
+            // If no order in Data, they are usually in DB order
+        }
+
+        setDisplayCards(cards)
+        setCurrentIndex(0)
+        setCompleted(false)
+        setIsFlipped(false)
+    }, [isRandom, reviewOnlyUnknown, level, progress])
 
     const saveProgress = useCallback(
         async (flashcardId: string, known: boolean) => {
@@ -77,12 +108,12 @@ export default function LevelPage() {
 
     const handleCardResult = useCallback(
         async (known: boolean) => {
-            if (!level) return
+            if (displayCards.length === 0) return
 
-            const currentCard = level.flashcards[currentIndex]
+            const currentCard = displayCards[currentIndex]
             await saveProgress(currentCard.id, known)
 
-            if (currentIndex < level.flashcards.length - 1) {
+            if (currentIndex < displayCards.length - 1) {
                 setTimeout(() => {
                     setCurrentIndex((prev) => prev + 1)
                     setIsFlipped(false)
@@ -93,7 +124,7 @@ export default function LevelPage() {
                 }, 300)
             }
         },
-        [level, currentIndex, saveProgress]
+        [displayCards, currentIndex, saveProgress]
     )
 
     if (status === "loading" || loading) {
@@ -119,32 +150,54 @@ export default function LevelPage() {
 
     const knownCount = Object.values(progress).filter(Boolean).length
     const totalCards = level.flashcards.length
+    const sessionTotal = displayCards.length
 
-    if (completed) {
+    if (completed || sessionTotal === 0) {
         return (
             <main className="min-h-screen flex items-center justify-center p-4">
-                <div className="text-center">
+                <div className="text-center max-w-sm w-full bg-gray-800/50 backdrop-blur-xl p-8 rounded-3xl border border-gray-700/50 shadow-2xl">
                     <div className="text-6xl mb-4">🎉</div>
-                    <h2 className="text-2xl font-bold mb-2">Niveau terminé !</h2>
+                    <h2 className="text-2xl font-bold mb-2">
+                        {sessionTotal === 0 && reviewOnlyUnknown ? "Tout est maîtrisé !" : "Lot terminé !"}
+                    </h2>
                     <p className="text-gray-400 mb-6">
-                        Tu connais {knownCount} / {totalCards} mots
+                        {sessionTotal === 0 && reviewOnlyUnknown
+                            ? "Tu connais déjà toutes les cartes de ce niveau."
+                            : `Tu as vu ${sessionTotal} cartes.`}
+                        <br />
+                        Global: {knownCount} / {totalCards} connus
                     </p>
-                    <div className="flex gap-4 justify-center">
+                    <div className="flex flex-col gap-3">
                         <button
                             onClick={() => {
+                                // Force refresh display cards
+                                if (reviewOnlyUnknown) {
+                                    setReviewOnlyUnknown(false)
+                                } else {
+                                    setIsRandom(prev => !prev) // Toggle trigger
+                                    setIsRandom(prev => !prev)
+                                }
                                 setCurrentIndex(0)
                                 setIsFlipped(false)
                                 setCompleted(false)
                             }}
-                            className="px-6 py-3 bg-indigo-500 rounded-lg hover:bg-indigo-600 transition"
+                            className="w-full py-4 bg-indigo-500 rounded-2xl font-semibold hover:bg-indigo-600 transition active:scale-95 shadow-lg shadow-indigo-900/20"
                         >
                             Recommencer
                         </button>
+                        {reviewOnlyUnknown && sessionTotal === 0 && (
+                            <button
+                                onClick={() => setReviewOnlyUnknown(false)}
+                                className="w-full py-4 bg-gray-700 rounded-2xl font-semibold hover:bg-gray-600 transition active:scale-95"
+                            >
+                                Revoir tout le niveau
+                            </button>
+                        )}
                         <Link
                             href="/levels"
-                            className="px-6 py-3 bg-gray-700 rounded-lg hover:bg-gray-600 transition"
+                            className="w-full py-4 bg-gray-800/50 border border-gray-700/50 rounded-2xl font-semibold hover:bg-gray-700 transition active:scale-95 text-gray-300"
                         >
-                            Autres niveaux
+                            Retour aux niveaux
                         </Link>
                     </div>
                 </div>
@@ -152,22 +205,52 @@ export default function LevelPage() {
         )
     }
 
-    const currentCard = level.flashcards[currentIndex]
+    const currentCard = displayCards[currentIndex]
 
     return (
         <main className="min-h-screen flex flex-col p-4">
             <header className="flex justify-between items-center mb-4 max-w-md mx-auto w-full">
-                <Link href="/levels" className="text-gray-400 hover:text-white transition">
+                <Link href="/levels" className="text-gray-400 hover:text-white transition w-8">
                     ✕
                 </Link>
-                <div className="text-center">
-                    <h1 className="font-semibold">{level.name}</h1>
-                    <p className="text-sm text-gray-400">
-                        {currentIndex + 1} / {totalCards}
+                <div className="text-center flex-1">
+                    <h1 className="font-semibold text-sm truncate px-4">{level.name}</h1>
+                    <p className="text-[10px] uppercase tracking-wider text-gray-500 font-bold">
+                        {currentIndex + 1} / {sessionTotal}
                     </p>
                 </div>
-                <div className="text-sm text-gray-400 w-8">
-                    {/* Spacer */}
+
+                {/* Preferences Menu */}
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => setIsRandom(!isRandom)}
+                        className={`p-2 rounded-lg transition-colors ${isRandom ? "bg-indigo-500/20 text-indigo-400" : "text-gray-500 hover:text-gray-300"}`}
+                        title="Mode Aléatoire"
+                    >
+                        🔀
+                    </button>
+                    <button
+                        onClick={() => setReviewOnlyUnknown(!reviewOnlyUnknown)}
+                        className={`p-2 rounded-lg transition-colors ${reviewOnlyUnknown ? "bg-orange-500/20 text-orange-400" : "text-gray-500 hover:text-gray-300"}`}
+                        title="Inconnues seulement"
+                    >
+                        🎯
+                    </button>
+                    <button
+                        onClick={async () => {
+                            if (confirm("Voulez-vous vraiment oublier vos progrès pour ce niveau ?")) {
+                                await fetch(`/api/levels/${levelId}/reset`, { method: "POST" })
+                                setProgress({})
+                                setReviewOnlyUnknown(false)
+                                setCurrentIndex(0)
+                                setCompleted(false)
+                            }
+                        }}
+                        className="p-2 rounded-lg text-gray-500 hover:text-red-400 transition-colors"
+                        title="Réinitialiser la progression"
+                    >
+                        🗑️
+                    </button>
                 </div>
             </header>
 
@@ -176,7 +259,7 @@ export default function LevelPage() {
                 <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
                     <div
                         className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-300"
-                        style={{ width: `${((currentIndex + 1) / totalCards) * 100}%` }}
+                        style={{ width: `${((currentIndex + 1) / sessionTotal) * 100}%` }}
                     />
                 </div>
             </div>
