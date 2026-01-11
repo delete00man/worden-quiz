@@ -43,6 +43,9 @@ export default function LevelPage() {
     const [reviewOnlyUnknown, setReviewOnlyUnknown] = useState(false)
     const [displayCards, setDisplayCards] = useState<FlashcardData[]>([])
 
+    // Ref to track if we need to rebuild the queue (avoids infinite loops)
+    const needsQueueRebuild = useRef(true)
+
     useEffect(() => {
         if (status === "unauthenticated") {
             router.push("/auth")
@@ -62,40 +65,69 @@ export default function LevelPage() {
                         progressMap[p.flashcardId] = p.known
                     })
                     setProgress(progressMap)
-
-                    // Initial setup of display cards
-                    setDisplayCards(levelData.flashcards)
+                    // Initial build will happen in the next effect because needsQueueRebuild is true
                     setLoading(false)
                 })
                 .catch(() => setLoading(false))
         }
     }, [status, levelId])
 
-    // Update display cards when preferences change
+    // Rebuild the session queue ONLY when filters change or level data is first loaded
+    // We intentionally do NOT depend on 'progress' here to avoid re-filtering
+    // while the user is playing (which causes cards to vanish/skip).
     useEffect(() => {
-        if (!level) return
+        if (!level || !needsQueueRebuild.current) return
 
         let cards = [...level.flashcards]
 
         if (reviewOnlyUnknown) {
+            // Apply filter based on CURRENT progress at the start of the session
             cards = cards.filter(card => !progress[card.id])
         }
 
         if (isRandom) {
             cards = cards.sort(() => Math.random() - 0.5)
-        } else {
-            // Sort by ID or original order if available to keep stable when disabling random
-            // If no order in Data, they are usually in DB order
         }
 
         setDisplayCards(cards)
         setCurrentIndex(0)
         setCompleted(false)
         setIsFlipped(false)
-    }, [isRandom, reviewOnlyUnknown, level, progress])
+
+        needsQueueRebuild.current = false
+    }, [isRandom, reviewOnlyUnknown, level, progress]) // progress added for initial load, but guarded by needsQueueRebuild
+
+    // Force a rebuild when toggles change
+    const toggleRandom = () => {
+        needsQueueRebuild.current = true
+        setIsRandom(prev => !prev)
+    }
+
+    const toggleUnknownOnly = () => {
+        needsQueueRebuild.current = true
+        setReviewOnlyUnknown(prev => !prev)
+    }
+
+    const resetSession = () => {
+        needsQueueRebuild.current = true
+        // Trigger effect by toggling a dummy state or just calling a rebuild function if we extracted it
+        // Simpler here: just re-running the effect logic manually or forcing a re-render is tricky.
+        // Let's toggle random back and forth or just re-run the logic.
+        // Actually, since we want to reload based on CURRENT filters:
+
+        let cards = [...(level?.flashcards || [])]
+        if (reviewOnlyUnknown) cards = cards.filter(card => !progress[card.id])
+        if (isRandom) cards = cards.sort(() => Math.random() - 0.5)
+
+        setDisplayCards(cards)
+        setCurrentIndex(0)
+        setCompleted(false)
+        setIsFlipped(false)
+    }
 
     const saveProgress = useCallback(
         async (flashcardId: string, known: boolean) => {
+            // Optimistic update of global progress map
             setProgress((prev) => ({ ...prev, [flashcardId]: known }))
             await fetch("/api/progress", {
                 method: "POST",
@@ -111,13 +143,14 @@ export default function LevelPage() {
             if (displayCards.length === 0) return
 
             const currentCard = displayCards[currentIndex]
+            // We await saveProgress but it doesn't trigger a re-render of displayCards anymore
             await saveProgress(currentCard.id, known)
 
             if (currentIndex < displayCards.length - 1) {
                 setTimeout(() => {
                     setCurrentIndex((prev) => prev + 1)
                     setIsFlipped(false)
-                }, 300) // Wait for swipe anim
+                }, 300)
             } else {
                 setTimeout(() => {
                     setCompleted(true)
@@ -152,6 +185,7 @@ export default function LevelPage() {
     const totalCards = level.flashcards.length
     const sessionTotal = displayCards.length
 
+
     if (completed || sessionTotal === 0) {
         return (
             <main className="min-h-screen flex items-center justify-center p-4">
@@ -169,25 +203,14 @@ export default function LevelPage() {
                     </p>
                     <div className="flex flex-col gap-3">
                         <button
-                            onClick={() => {
-                                // Force refresh display cards
-                                if (reviewOnlyUnknown) {
-                                    setReviewOnlyUnknown(false)
-                                } else {
-                                    setIsRandom(prev => !prev) // Toggle trigger
-                                    setIsRandom(prev => !prev)
-                                }
-                                setCurrentIndex(0)
-                                setIsFlipped(false)
-                                setCompleted(false)
-                            }}
+                            onClick={resetSession}
                             className="w-full py-4 bg-indigo-500 rounded-2xl font-semibold hover:bg-indigo-600 transition active:scale-95 shadow-lg shadow-indigo-900/20"
                         >
                             Recommencer
                         </button>
                         {reviewOnlyUnknown && sessionTotal === 0 && (
                             <button
-                                onClick={() => setReviewOnlyUnknown(false)}
+                                onClick={toggleUnknownOnly}
                                 className="w-full py-4 bg-gray-700 rounded-2xl font-semibold hover:bg-gray-600 transition active:scale-95"
                             >
                                 Revoir tout le niveau
@@ -223,14 +246,14 @@ export default function LevelPage() {
                 {/* Preferences Menu */}
                 <div className="flex items-center gap-2">
                     <button
-                        onClick={() => setIsRandom(!isRandom)}
+                        onClick={toggleRandom}
                         className={`p-2 rounded-lg transition-colors ${isRandom ? "bg-indigo-500/20 text-indigo-400" : "text-gray-500 hover:text-gray-300"}`}
                         title="Mode Aléatoire"
                     >
                         🔀
                     </button>
                     <button
-                        onClick={() => setReviewOnlyUnknown(!reviewOnlyUnknown)}
+                        onClick={toggleUnknownOnly}
                         className={`p-2 rounded-lg transition-colors ${reviewOnlyUnknown ? "bg-orange-500/20 text-orange-400" : "text-gray-500 hover:text-gray-300"}`}
                         title="Inconnues seulement"
                     >
